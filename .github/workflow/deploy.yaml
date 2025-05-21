@@ -1,0 +1,70 @@
+name: CI/CD with Security Gates
+
+on:
+  push:
+    branches: [ "main" ]
+     
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Run SAST - SonarCloud
+        uses: SonarSource/sonarcloud-github-action@master
+        with:
+          projectBaseDir: .
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+
+      - name: Generate SBOM - CycloneDX
+        run: |
+          npm install -g @cyclonedx/bom
+          cyclonedx-bom -o bom.xml
+
+      - name: Upload SBOM artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: bom.xml
+
+      - name: Fetch AWS secrets from Vault
+        uses: hashicorp/vault-action@v2.4.0
+        with:
+          url: http://127.0.0.1:8200
+          method: token
+          token: ${{ secrets.VAULT_TOKEN }}
+          secrets: |
+            secret/github AWS_ACCESS_KEY_ID | AWS_ACCESS_KEY_ID
+            secret/github AWS_SECRET_ACCESS_KEY | AWS_SECRET_ACCESS_KEY
+
+      - name: Configure AWS CLI
+        run: |
+          aws configure set aws_access_key_id $AWS_ACCESS_KEY_ID
+          aws configure set aws_secret_access_key $AWS_SECRET_ACCESS_KEY
+
+      - name: Evaluate S3 policy using OPA
+        run: |
+          curl -L -o opa https://openpolicyagent.org/downloads/latest/opa_linux_amd64
+          chmod +x opa
+          ./opa eval --format pretty --input opa/s3_config.json --data opa/s3_policy.rego "data.s3.security.deny"
+
+      - name: Fail if OPA policy check fails
+        run: |
+          DENY=$(./opa eval --format=json --input opa/s3_config.json --data opa/s3_policy.rego "data.s3.security.deny" | jq '.result[0].expressions[0].value | length')
+          if [ "$DENY" -gt 0 ]; then
+            echo "S3 policy failed!"
+            exit 1
+          fi
+

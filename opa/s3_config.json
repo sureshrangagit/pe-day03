@@ -1,0 +1,13 @@
+{
+  "PublicAccessBlockConfiguration": {
+    "BlockPublicAcls": false
+  },
+  "EncryptionConfiguration": {
+    "Rules": [{
+      "ApplyServerSideEncryptionByDefault": {
+        "SSEAlgorithm": "AES256"
+      }
+    }]
+  }
+}
+
